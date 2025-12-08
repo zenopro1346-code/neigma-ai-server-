@@ -4,32 +4,77 @@ import axios from "axios";
 const app = express();
 app.use(express.json());
 
+// ENV
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
+// Telegram API
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL;
+const WEBHOOK_URL = `https://neigma-ai-server-3.onrender.com/webhook`;
 
-// --- Set Webhook ---
+// ----------------------
+// 1) SET TELEGRAM WEBHOOK
+// ----------------------
 app.get("/", async (req, res) => {
-  if (!WEBHOOK_URL) return res.send("Server running without external URL yet.");
+  if (!TELEGRAM_TOKEN) return res.send("Missing TELEGRAM_TOKEN");
+
   try {
-    await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_URL}/webhook`);
-    res.send("Webhook set successfully!");
-  } catch (e) {
-    res.send("Webhook error: " + e.message);
+    await axios.get(
+      `${TELEGRAM_API}/setWebhook?url=${encodeURIComponent(WEBHOOK_URL)}`
+    );
+    res.send("Webhook set successfully");
+  } catch (err) {
+    res.send("Error setting webhook: " + err.message);
   }
 });
 
-// --- Telegram Handler ---
+// ----------------------
+// 2) TELEGRAM MESSAGE HANDLER
+// ----------------------
 app.post("/webhook", async (req, res) => {
   try {
     const message = req.body.message;
-    if (!message || !message.text) return res.send("No message");
+    if (!message || !message.text) return res.sendStatus(200);
 
     const userText = message.text;
 
-    // GROQ request
+    // Groq Request
+    const groqResponse = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama3-70b-8192",
+        messages: [{ role: "user", content: userText }],
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${GROQ_API_KEY}`,
+        },
+      }
+    );
+
+    const botReply = groqResponse.data.choices[0].message.content;
+
+    // Send reply to Telegram
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: message.chat.id,
+      text: botReply,
+    });
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.log("TELEGRAM ERROR:", err.message);
+    res.sendStatus(200);
+  }
+});
+
+// ----------------------
+// 3) AI API FOR SUPERAPP
+// ----------------------
+app.post("/ai", async (req, res) => {
+  try {
+    const userText = req.body.message;
+
     const groqResponse = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
@@ -46,42 +91,13 @@ app.post("/webhook", async (req, res) => {
 
     const aiText = groqResponse.data.choices[0].message.content;
 
-    // Send message to user
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: message.chat.id,
-      text: aiText,
-    });
-
-    res.send("OK");
-  } catch (e) {
-    console.log(e);
-    res.send("Error: " + e.message);
-  }
-});
-
-// --- Start ---
-app.listen(3000, () => console.log("Server running on port 3000"));
-app.post("/ai", async (req, res) => {
-  try {
-    const userText = req.body.message;
-
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: userText }],
-      }),
-    });
-
-    const data = await response.json();
-    const aiText = data.choices?.[0]?.message?.content || "No response.";
-
     res.send({ reply: aiText });
   } catch (err) {
     res.send({ error: err.message });
   }
 });
+
+// ----------------------
+// 4) START SERVER
+// ----------------------
+app.listen(3000, () => console.log("Server running on port 3000"));
