@@ -1,136 +1,87 @@
 import express from "express";
 import axios from "axios";
 import bodyParser from "body-parser";
-import fs from "fs-extra";
 import cors from "cors";
 
-let TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
-let GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-
 const app = express();
-app.use(bodyParser.json({ limit: "20mb" }));
 app.use(cors());
+app.use(bodyParser.json({ limit: "10mb" }));
 
-// ================= AI CORE =================
+// ENV
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const BOT_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+// AI simple responder
 async function ai(prompt) {
   try {
     const res = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama3-70b-8192",
+        model: "llama-3.1-8b-instant",
         messages: [{ role: "user", content: prompt }]
       },
-      {
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
+      { headers: { Authorization: `Bearer ${GROQ_API_KEY}` } }
     );
 
-    return res.data.choices[0].message.content;
-  } catch (err) {
-    return "❌ Groq API Error: " + (err?.response?.data?.error?.message || err);
+    return res.data.choices?.[0]?.message?.content || "No response";
+  } catch (e) {
+    return "AI error: " + e.message;
   }
 }
 
-// =============== PROJECT BUILDER ===============
-async function buildProject(instruction) {
-  const out = await ai(`
-You are a project-builder AI.
-Output files in EXACT RAW FORMAT:
-
----filename---
-folder/file.ext
----content---
-<the file content>
----end---
-
-INSTRUCTION: ${instruction}
-  `);
-
-  const files = out.split("---filename---").slice(1);
-
-  for (const block of files) {
-    const [path, rest] = block.split("---content---");
-    const [content] = rest.split("---end---");
-
-    const filePath = path.trim();
-    const fileContent = content.trim();
-
-    await fs.outputFile("./projects/" + filePath, fileContent);
-  }
-
-  return "✔ پروژه با موفقیت ساخته شد!";
-}
-
-// ================= RUNNER =================
-async function runTask(cmd) {
-  return await ai(`
-You are an execution agent.
-Process this command and return a meaningful result:
-
-${cmd}
-  `);
-}
-
-// ================= MASTER AGENT =================
-async function agent(msg) {
-  if (msg.startsWith("build:"))
-    return await buildProject(msg.replace("build:", "").trim());
-
-  if (msg.startsWith("run:"))
-    return await runTask(msg.replace("run:", "").trim());
-
-  return await ai(msg);
-}
-
-// ================= TELEGRAM BOT =================
+// Telegram Webhook
 app.post("/telegram/webhook", async (req, res) => {
+  res.sendStatus(200);
   try {
     const msg = req.body.message;
-    if (!msg) return res.sendStatus(200);
+    if (!msg || !msg.text) return;
+    const chatId = msg.chat.id;
+    const text = msg.text;
 
-    const text = msg.text || "";
-    const chat = msg.chat.id;
+    const reply = await ai(text);
 
-    const reply = await agent(text);
-
-    await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-      {
-        chat_id: chat,
-        text: reply
-      }
-    );
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.log("Telegram Error:", err?.response?.data || err);
-    res.sendStatus(200);
+    await axios.post(`${BOT_URL}/sendMessage`, {
+      chat_id: chatId,
+      text: reply
+    });
+  } catch (e) {
+    console.log("Webhook error:", e.message);
   }
 });
 
-// ================= REST APIs =================
-app.post("/builder", async (req, res) => {
-  const output = await buildProject(req.body.instruction || "");
-  res.json({ output });
+// Set Webhook
+app.get("/", async (req, res) => {
+  try {
+    const renderUrl = process.env.RENDER_EXTERNAL_URL;
+    const hook = `${renderUrl}/telegram/webhook`;
+
+    await axios.get(`${BOT_URL}/setWebhook`, {
+      params: { url: hook }
+    });
+
+    res.send("Webhook set successfully");
+  } catch (e) {
+    res.send("Webhook error: " + e.message);
+  }
 });
 
+// AI endpoint
+app.post("/ai", async (req, res) => {
+  const prompt = req.body.prompt;
+  const response = await ai(prompt);
+  res.json({ response });
+});
+
+// Agent endpoint
 app.post("/agent", async (req, res) => {
-  const output = await agent(req.body.command || "");
-  res.json({ output });
+  const input = req.body.input;
+  const response = await ai("Act like an agent: " + input);
+  res.json({ response });
 });
 
-// ================= HOME =================
-app.get("/", (req, res) => {
-  res.send("AI Builder System (Safe Single File) Running");
+// Start server
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log("Server running on port", port);
 });
-
-// ================= START =================
-app.listen(3000, () => console.log("🔥 Server running on port 3000 🔥"));
-
-// ================= API KEYS (RENDER SETS THESE) =================
-TELEGRAM_TOKEN = "";
-GROQ_API_KEY = "";
-          
