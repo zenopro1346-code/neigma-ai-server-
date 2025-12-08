@@ -61,3 +61,27 @@ app.post("/webhook", async (req, res) => {
 
 // --- Start ---
 app.listen(3000, () => console.log("Server running on port 3000"));
+app.post("/ai", async (req, res) => {
+  try {
+    const userText = req.body.message;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: userText }],
+      }),
+    });
+
+    const data = await response.json();
+    const aiText = data.choices?.[0]?.message?.content || "No response.";
+
+    res.send({ reply: aiText });
+  } catch (err) {
+    res.send({ error: err.message });
+  }
+});
